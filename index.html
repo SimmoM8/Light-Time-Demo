@@ -125,6 +125,46 @@
             box-shadow: 0 6px 16px rgba(35, 120, 255, 0.35);
         }
 
+        .toolbar__slider {
+            appearance: none;
+            width: 200px;
+            height: 4px;
+            border-radius: 999px;
+            background: rgba(120, 186, 255, 0.25);
+            outline: none;
+            cursor: pointer;
+        }
+
+        .toolbar__slider::-webkit-slider-thumb {
+            appearance: none;
+            width: 14px;
+            height: 14px;
+            border-radius: 50%;
+            background: #78baff;
+            box-shadow: 0 0 0 4px rgba(120, 186, 255, 0.25);
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+        }
+
+        .toolbar__slider::-webkit-slider-thumb:hover {
+            transform: scale(1.1);
+            box-shadow: 0 0 0 6px rgba(120, 186, 255, 0.2);
+        }
+
+        .toolbar__slider::-moz-range-thumb {
+            width: 14px;
+            height: 14px;
+            border: none;
+            border-radius: 50%;
+            background: #78baff;
+            box-shadow: 0 0 0 4px rgba(120, 186, 255, 0.25);
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+        }
+
+        .toolbar__slider::-moz-range-thumb:hover {
+            transform: scale(1.1);
+            box-shadow: 0 0 0 6px rgba(120, 186, 255, 0.2);
+        }
+
         #canvas-container {
             flex: 1;
             position: relative;
@@ -184,6 +224,11 @@
                 <button id="decrease-timestep" class="toolbar__chip">-</button>
                 <span id="timestep-display" class="toolbar__value">1.0x</span>
                 <button id="increase-timestep" class="toolbar__chip">+</button>
+            </div>
+            <div class="toolbar__group">
+                <span class="toolbar__label">Scrub</span>
+                <input id="timeline-scrubber" class="toolbar__slider" type="range" min="0" max="0" value="0" step="1">
+                <span id="frame-display" class="toolbar__value">0</span>
             </div>
         </div>
     </header>

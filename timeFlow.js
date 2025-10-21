@@ -11,6 +11,15 @@ let rainbowHue = 0;
 let pendingStep = false;
 let timeStepMultiplier = 1;
 let timeStepDisplay = null;
+let timeline = [];
+let scrubberElement = null;
+let frameDisplay = null;
+let currentFrameIndex = 0;
+let isScrubbing = false;
+let ringButtonEl = null;
+let rainbowButtonEl = null;
+let motionButtonEl = null;
+let stepButtonEl = null;
 
 function setup() {
     const canvasParent = document.getElementById('canvas-container');
@@ -18,7 +27,9 @@ function setup() {
     canvas.parent(canvasParent); // attach to parent div
     colorMode(HSB, 360, 100, 100, 255);
     resetParticleState();
+    rings = [];
     initializeToolbarControls();
+    initializeTimelineState();
 }
 
 function draw() {
@@ -26,20 +37,24 @@ function draw() {
     noFill();
     strokeWeight(2);
 
-    const shouldAdvance = !isPaused || pendingStep;
+    const shouldAdvance = (!isPaused || pendingStep) && !isScrubbing;
 
     if (shouldAdvance) {
+        if (currentFrameIndex < timeline.length - 1) {
+            timeline = timeline.slice(0, currentFrameIndex + 1);
+        }
+
         // Move particle
         particle.x += particle.speed * timeStepMultiplier;
         particle.y = height / 2 + sin(particle.x * 0.05) * 50;
 
         if (isRainbowMode) {
-            rainbowHue = (rainbowHue + 1) % 360;
-            particle.color = color(rainbowHue, 80, 100, 255);
+            rainbowHue = (rainbowHue + timeStepMultiplier) % 360;
+            setParticleColorHSB(rainbowHue, 80, 100, 255);
         }
 
         // Emit ring at current position
-        rings.push(new Ring(particle.x, particle.y, particle.color));
+        rings.push(new Ring(particle.x, particle.y, particle.colorHSB));
         pendingStep = false;
     }
 
@@ -50,9 +65,15 @@ function draw() {
         if (rings[i].alpha <= 0) rings.splice(i, 1);
     }
 
+    if (shouldAdvance) {
+        timeline.push(captureFrameSnapshot());
+        currentFrameIndex = timeline.length - 1;
+        updateScrubberUI();
+    }
+
     // Draw main particle
     noStroke();
-    fill(particle.color);
+    fill(particle.colorHSB.h, particle.colorHSB.s, particle.colorHSB.b, particle.colorHSB.a);
     ellipse(particle.x, particle.y, 10);
 
     // Reset if off screen
@@ -61,12 +82,12 @@ function draw() {
 
 // Ring class
 class Ring {
-    constructor(x, y, colorValue) {
+    constructor(x, y, colorHSB) {
         this.x = x;
         this.y = y;
         this.radius = 0;
         this.alpha = 255;
-        this.baseColor = colorValue ? color(colorValue) : color(0, 0, 100, 255);
+        this.colorHSB = normalizeColorHSB(colorHSB);
     }
 
     update(delta = 1) {
@@ -75,10 +96,25 @@ class Ring {
     }
 
     show() {
-        const ringColor = color(this.baseColor);
-        ringColor.setAlpha(this.alpha);
-        stroke(ringColor);
+        stroke(this.colorHSB.h, this.colorHSB.s, this.colorHSB.b, this.alpha);
         ellipse(this.x, this.y, this.radius * 2);
+    }
+
+    serialize() {
+        return {
+            x: this.x,
+            y: this.y,
+            radius: this.radius,
+            alpha: this.alpha,
+            colorHSB: { ...this.colorHSB }
+        };
+    }
+
+    static fromData(data) {
+        const ring = new Ring(data.x, data.y, data.colorHSB);
+        ring.radius = data.radius;
+        ring.alpha = data.alpha;
+        return ring;
     }
 }
 
@@ -88,14 +124,127 @@ function windowResized() {
 }
 
 function resetParticleState() {
-    particle = { x: 0, y: height / 2, speed: 2, color: color(0, 0, 100, 255) };
+    particle = { x: 0, y: height / 2, speed: 2 };
     rainbowHue = 0;
+    setParticleColorHSB(0, 0, 100, 255);
+}
+
+function normalizeColorHSB(data) {
+    const defaults = { h: 0, s: 0, b: 100, a: 255 };
+    if (!data) return { ...defaults };
+    return {
+        h: data.h ?? defaults.h,
+        s: data.s ?? defaults.s,
+        b: data.b ?? defaults.b,
+        a: data.a ?? defaults.a
+    };
+}
+
+function setParticleColorHSB(h, s, b, a = 255) {
+    setParticleColorFromData({ h, s, b, a });
+}
+
+function setParticleColorFromData(colorData) {
+    const normalized = normalizeColorHSB(colorData);
+    particle.colorHSB = { ...normalized };
+    particle.color = color(normalized.h, normalized.s, normalized.b, normalized.a);
 }
 
 function setTimeStepMultiplier(value) {
     const quantized = Math.round(value / TIME_STEP_INCREMENT) * TIME_STEP_INCREMENT;
     timeStepMultiplier = clampTimeStep(parseFloat(quantized.toFixed(2)));
     refreshTimeStepDisplay();
+}
+
+function captureFrameSnapshot() {
+    return {
+        particle: {
+            x: particle.x,
+            y: particle.y,
+            speed: particle.speed,
+            colorHSB: { ...particle.colorHSB }
+        },
+        rings: rings.map(ring => ring.serialize()),
+        rainbowHue,
+        isRainbowMode
+    };
+}
+
+function applyFrameSnapshot(snapshot) {
+    if (!snapshot) return;
+    particle.x = snapshot.particle.x;
+    particle.y = snapshot.particle.y;
+    particle.speed = snapshot.particle.speed;
+    setParticleColorFromData(snapshot.particle.colorHSB);
+    rainbowHue = snapshot.rainbowHue;
+    isRainbowMode = snapshot.isRainbowMode;
+    rings = snapshot.rings.map(Ring.fromData);
+    updateRainbowButtonState();
+}
+
+function initializeTimelineState() {
+    timeline = [captureFrameSnapshot()];
+    currentFrameIndex = 0;
+    updateScrubberUI(true);
+}
+
+function goToFrame(index) {
+    if (!timeline.length) return;
+    const clamped = Math.round(Math.min(Math.max(index, 0), timeline.length - 1));
+    currentFrameIndex = clamped;
+    applyFrameSnapshot(timeline[clamped]);
+    updateScrubberUI(true);
+    pendingStep = false;
+}
+
+function updateScrubberUI(forceValue = false) {
+    if (!scrubberElement || !frameDisplay) return;
+    const maxIndex = Math.max(0, timeline.length - 1);
+    scrubberElement.max = String(maxIndex);
+    if (forceValue || !isScrubbing) {
+        scrubberElement.value = String(currentFrameIndex);
+    }
+    frameDisplay.textContent = currentFrameIndex.toString();
+}
+
+function updateMotionControls() {
+    if (motionButtonEl) {
+        motionButtonEl.textContent = isPaused ? 'Resume' : 'Pause';
+    }
+    if (stepButtonEl) {
+        stepButtonEl.hidden = !isPaused;
+    }
+}
+
+function updateRingButtonState() {
+    if (ringButtonEl) {
+        ringButtonEl.textContent = showRings ? 'Hide Rings' : 'Show Rings';
+    }
+}
+
+function updateRainbowButtonState() {
+    if (rainbowButtonEl) {
+        rainbowButtonEl.textContent = isRainbowMode ? 'Disable Rainbow' : 'Enable Rainbow';
+    }
+}
+
+function handleScrubInput() {
+    if (!scrubberElement) return;
+    if (!isScrubbing) {
+        isScrubbing = true;
+        if (!isPaused) {
+            isPaused = true;
+            updateMotionControls();
+        }
+    }
+    goToFrame(Number(scrubberElement.value));
+}
+
+function handleScrubChange() {
+    isScrubbing = false;
+    if (scrubberElement) {
+        goToFrame(Number(scrubberElement.value));
+    }
 }
 
 function clampTimeStep(value) {
@@ -113,49 +262,60 @@ function formatTimeStepLabel(value) {
 }
 
 function initializeToolbarControls() {
-    const ringButton = document.getElementById('toggle-rings');
-    const rainbowButton = document.getElementById('toggle-rainbow');
+    ringButtonEl = document.getElementById('toggle-rings');
+    rainbowButtonEl = document.getElementById('toggle-rainbow');
+    motionButtonEl = document.getElementById('toggle-motion');
+    stepButtonEl = document.getElementById('step-forward');
     const resetButton = document.getElementById('reset');
-    const motionButton = document.getElementById('toggle-motion');
-    const stepButton = document.getElementById('step-forward');
     const decreaseTimeStepButton = document.getElementById('decrease-timestep');
     const increaseTimeStepButton = document.getElementById('increase-timestep');
+    scrubberElement = document.getElementById('timeline-scrubber');
+    frameDisplay = document.getElementById('frame-display');
     timeStepDisplay = document.getElementById('timestep-display');
     refreshTimeStepDisplay();
 
-    if (ringButton) {
-        ringButton.addEventListener('click', () => {
+    updateRingButtonState();
+    updateRainbowButtonState();
+    updateMotionControls();
+
+    if (ringButtonEl) {
+        ringButtonEl.addEventListener('click', () => {
             showRings = !showRings;
-            ringButton.textContent = showRings ? 'Hide Rings' : 'Show Rings';
+            updateRingButtonState();
         });
     }
 
-    if (rainbowButton) {
-        rainbowButton.addEventListener('click', () => {
+    if (rainbowButtonEl) {
+        rainbowButtonEl.addEventListener('click', () => {
             isRainbowMode = !isRainbowMode;
             if (isRainbowMode) {
                 rainbowHue = 0;
-                particle.color = color(rainbowHue, 80, 100, 255);
+                setParticleColorHSB(rainbowHue, 80, 100, 255);
             } else {
-                particle.color = color(0, 0, 100, 255);
                 rainbowHue = 0;
+                setParticleColorHSB(0, 0, 100, 255);
             }
-            rainbowButton.textContent = isRainbowMode ? 'Disable Rainbow' : 'Enable Rainbow';
+            updateRainbowButtonState();
+            if (timeline.length) {
+                timeline[currentFrameIndex] = captureFrameSnapshot();
+                updateScrubberUI(true);
+            }
         });
     }
 
-    if (motionButton) {
-        motionButton.addEventListener('click', () => {
+    if (motionButtonEl) {
+        motionButtonEl.addEventListener('click', () => {
             isPaused = !isPaused;
-            motionButton.textContent = isPaused ? 'Resume' : 'Pause';
-            if (stepButton) stepButton.hidden = !isPaused;
+            isScrubbing = false;
+            updateMotionControls();
         });
     }
 
-    if (stepButton) {
-        stepButton.addEventListener('click', () => {
+    if (stepButtonEl) {
+        stepButtonEl.addEventListener('click', () => {
             if (isPaused) {
                 pendingStep = true;
+                isScrubbing = false;
             }
         });
     }
@@ -169,10 +329,11 @@ function initializeToolbarControls() {
             isRainbowMode = false;
             pendingStep = false;
             setTimeStepMultiplier(1);
-            if (motionButton) motionButton.textContent = 'Pause';
-            if (ringButton) ringButton.textContent = 'Hide Rings';
-            if (rainbowButton) rainbowButton.textContent = 'Enable Rainbow';
-            if (stepButton) stepButton.hidden = true;
+            initializeTimelineState();
+            updateMotionControls();
+            updateRingButtonState();
+            updateRainbowButtonState();
+            isScrubbing = false;
         });
     }
 
@@ -186,5 +347,10 @@ function initializeToolbarControls() {
         increaseTimeStepButton.addEventListener('click', () => {
             setTimeStepMultiplier(timeStepMultiplier + TIME_STEP_INCREMENT);
         });
+    }
+
+    if (scrubberElement) {
+        scrubberElement.addEventListener('input', handleScrubInput);
+        scrubberElement.addEventListener('change', handleScrubChange);
     }
 }
